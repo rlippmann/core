@@ -30,13 +30,14 @@ from homeassistant.const import (
     UnitOfSpeed,
     UnitOfTemperature,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import DOMAIN as HA_DOMAIN, HomeAssistant
 from homeassistant.exceptions import TemplateError
 from homeassistant.helpers import (
     area_registry as ar,
     device_registry as dr,
     entity,
     entity_registry as er,
+    issue_registry as ir,
     template,
 )
 from homeassistant.helpers.entity_platform import EntityPlatform
@@ -1967,6 +1968,7 @@ def test_relative_time(mock_is_safe, hass: HomeAssistant) -> None:
     """Test relative_time method."""
     hass.config.set_time_zone("UTC")
     now = datetime.strptime("2000-01-01 10:00:00 +00:00", "%Y-%m-%d %H:%M:%S %z")
+    issue_registry = ir.async_get(hass)
     relative_time_template = (
         '{{relative_time(strptime("2000-01-01 09:00:00", "%Y-%m-%d %H:%M:%S"))}}'
     )
@@ -1976,7 +1978,9 @@ def test_relative_time(mock_is_safe, hass: HomeAssistant) -> None:
             hass,
         ).async_render()
         assert result == "1 hour"
-
+        assert issue_registry.async_get_issue(
+            HA_DOMAIN, "template_function_relative_time_deprecated"
+        )
         result = template.Template(
             (
                 "{{"

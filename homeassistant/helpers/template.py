@@ -57,6 +57,7 @@ from homeassistant.const import (
     UnitOfLength,
 )
 from homeassistant.core import (
+    DOMAIN as HA_DOMAIN,
     Context,
     HomeAssistant,
     State,
@@ -78,7 +79,13 @@ from homeassistant.util.json import JSON_DECODE_EXCEPTIONS, json_loads
 from homeassistant.util.read_only_dict import ReadOnlyDict
 from homeassistant.util.thread import ThreadWithException
 
-from . import area_registry, device_registry, entity_registry, location as loc_helper
+from . import (
+    area_registry,
+    device_registry,
+    entity_registry,
+    issue_registry as ir,
+    location as loc_helper,
+)
 from .singleton import singleton
 from .typing import TemplateVarsType
 
@@ -2177,6 +2184,24 @@ def relative_time(hass: HomeAssistant, value: Any) -> Any:
 
     If the input are not a datetime object the input will be returned unmodified.
     """
+
+    def warn_relative_time_deprecated() -> None:
+        issue_registry = ir.async_get(hass)
+        issue_id = "template_function_relative_time_deprecated"
+        if issue_registry.async_get_issue(HA_DOMAIN, issue_id):
+            return
+        ir.async_create_issue(
+            hass,
+            HA_DOMAIN,
+            issue_id,
+            breaks_in_ha_version="2024.9.0",
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=issue_id,
+        )
+        _LOGGER.warning("Template function 'relative_time' is deprecated")
+
+    warn_relative_time_deprecated()
     if (render_info := _render_info.get()) is not None:
         render_info.has_time = True
 
