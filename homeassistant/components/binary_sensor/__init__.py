@@ -290,6 +290,7 @@ class BinarySensorEntityDescription(EntityDescription, frozen_or_thawed=True):
 CACHED_PROPERTIES_WITH_ATTR_ = {
     "device_class",
     "is_on",
+    "icon",
 }
 
 
@@ -300,6 +301,7 @@ class BinarySensorEntity(Entity, cached_properties=CACHED_PROPERTIES_WITH_ATTR_)
     _attr_device_class: BinarySensorDeviceClass | None
     _attr_is_on: bool | None = None
     _attr_state: None = None
+    _attr_icon: str | None = None
 
     async def async_internal_added_to_hass(self) -> None:
         """Call when the binary sensor entity is added to hass."""
