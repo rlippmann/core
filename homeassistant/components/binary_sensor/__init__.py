@@ -131,6 +131,43 @@ class BinarySensorDeviceClass(StrEnum):
 
 DEVICE_CLASSES_SCHEMA = vol.All(vol.Lower, vol.Coerce(BinarySensorDeviceClass))
 
+# tuple of MDI icons based upon device class
+# first element is for when the state is on
+# second element is for when the state is off
+
+DEVICE_CLASS_ICONS = (
+    ("mdi:battery-low", "mdi:battery"),  # BATTERY
+    ("mdi:battery-charging", "mdi:battery-check"),  # BATTERY_CHARGING
+    ("mdi:molecule-co", "mdi:check-bold"),  # CO
+    ("mdi:snowflake", "mdi:check-bold"),  # COLD
+    ("mdi:lan-check", "mdi:lan-disconnect"),  # CONNECTIVITY
+    ("mdi:door-open", "mdi:door-closed"),  # DOOR
+    ("mdi:garage-open", "mdi:garage"),  # GARAGE_DOOR
+    ("mdi:alert-octagon", "mdi:check-bold"),  # GAS
+    ("mdi:thermometer-high", "mdi:check-bold"),  # HEAT
+    ("mdi:lightbulb-on", "mdi:lightbulb-off"),  # LIGHT
+    ("mdi:lock-open-variant", "mdi:lock"),  # LOCK
+    ("mdi:water", "mdi:water-off"),  # MOISTURE
+    ("mdi:motion-sensor", "mdi:motion-sensor-off"),  # MOTION
+    ("mdi:play", "mdi:stop"),  # MOVING
+    ("mdi:home", "mdi:home-off"),  # OCCUPANCY
+    ("mdi:circle-outline", "mdi:close-circle"),  # OPENING
+    ("mdi:power-plug", "mdi:power-plug-off"),  # PLUG
+    ("mdi:power", "mdi:power-off"),  # POWER
+    ("mdi:home", "mdi:home-off"),  # PRESENCE
+    ("mdi:alert", "mdi:hand-okay"),  # PROBLEM
+    ("mdi:run-fast", "mdi:stop"),  # RUNNING
+    ("mdi:alert-octagon", "mdi:check-bold"),  # SAFETY
+    ("mdi:smoke-detector-alerty", "mdi:smoke-detector-off"),  # SMOKE
+    ("mdi:ear-hearing", "mdi:ear-hearing-off"),  # SOUND
+    ("mdi:alert-octagon", "mdi:check-bold"),  # TAMPER
+    ("mdi:update", "mdi:check-bold"),  # UPDATE
+    ("mdi:vibrate", "mdi:vibrate-off"),  # VIBRATION
+    ("mdi:window-open", "mdi:window-closed"),  # WINDOW
+)
+
+DEVICE_ICON_MAP = dict(zip(BinarySensorDeviceClass, DEVICE_CLASS_ICONS))
+
 # DEVICE_CLASS* below are deprecated as of 2021.12
 # use the BinarySensorDeviceClass enum instead.
 DEVICE_CLASSES = [cls.value for cls in BinarySensorDeviceClass]
@@ -300,6 +337,16 @@ class BinarySensorEntity(Entity, cached_properties=CACHED_PROPERTIES_WITH_ATTR_)
         if (is_on := self.is_on) is None:
             return None
         return STATE_ON if is_on else STATE_OFF
+
+    @cached_property
+    def icon(self) -> str | None:
+        """Return the icon to use in the frontend, if any."""
+        if self.device_class is None or self.is_on is None:
+            return None
+        device_class_values = DEVICE_ICON_MAP.get(self.device_class)
+        if device_class_values:
+            return device_class_values[0] if self.is_on else device_class_values[1]
+        return None
 
 
 # These can be removed if no deprecated constant are in this module anymore
