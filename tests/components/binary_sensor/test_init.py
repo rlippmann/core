@@ -156,8 +156,9 @@ async def test_default_icon(
     )
 
     entity = binary_sensor.BinarySensorEntity()
-    entity.entity_id = "binary_sensor.test1"
-    entity._attr_device_class = device_class
+    entity_id_str = "binary_sensor.test"
+    entity.entity_id = entity_id_str
+    entity.device_class = device_class
 
     async def async_setup_entry_platform(
         hass: HomeAssistant,
@@ -180,10 +181,10 @@ async def test_default_icon(
 
     assert entity.icon is None
 
-    entity.is_on = True
+    hass.states.async_set(entity_id_str, STATE_ON)
     assert entity.icon == binary_sensor.DEVICE_ICON_MAP[device_class][0]
 
-    entity.is_on = False
+    hass.states.async_set(entity_id_str, STATE_OFF)
     assert entity.icon == binary_sensor.DEVICE_ICON_MAP[device_class][1]
 
 

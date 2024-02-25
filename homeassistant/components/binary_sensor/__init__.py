@@ -290,7 +290,6 @@ class BinarySensorEntityDescription(EntityDescription, frozen_or_thawed=True):
 CACHED_PROPERTIES_WITH_ATTR_ = {
     "device_class",
     "is_on",
-    "icon",
 }
 
 
@@ -301,7 +300,6 @@ class BinarySensorEntity(Entity, cached_properties=CACHED_PROPERTIES_WITH_ATTR_)
     _attr_device_class: BinarySensorDeviceClass | None
     _attr_is_on: bool | None = None
     _attr_state: None = None
-    _attr_icon: str | None = None
 
     async def async_internal_added_to_hass(self) -> None:
         """Call when the binary sensor entity is added to hass."""
@@ -340,14 +338,20 @@ class BinarySensorEntity(Entity, cached_properties=CACHED_PROPERTIES_WITH_ATTR_)
             return None
         return STATE_ON if is_on else STATE_OFF
 
-    @cached_property
+    @property
     def icon(self) -> str | None:
         """Return the icon to use in the frontend, if any."""
+        if (retval := super().icon) is not None:
+            return retval
         if self.device_class is None or self.is_on is None:
             return None
         device_class_values = DEVICE_ICON_MAP.get(self.device_class)
         if device_class_values:
-            return device_class_values[0] if self.is_on else device_class_values[1]
+            return (
+                device_class_values[0]
+                if self.state == STATE_ON
+                else device_class_values[1]
+            )
         return None
 
 
