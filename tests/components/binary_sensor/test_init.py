@@ -131,6 +131,62 @@ async def test_name(hass: HomeAssistant) -> None:
     assert state.attributes == {"device_class": "battery", "friendly_name": "Battery"}
 
 
+@pytest.mark.parametrize("device_class", list(binary_sensor.BinarySensorDeviceClass))
+async def test_default_icon(
+    device_class: binary_sensor.BinarySensorDeviceClass, hass: HomeAssistant
+) -> None:
+    """Test binary sensor default icon."""
+
+    async def async_setup_entry_init(
+        hass: HomeAssistant, config_entry: ConfigEntry
+    ) -> bool:
+        """Set up test config entry."""
+        await hass.config_entries.async_forward_entry_setup(
+            config_entry, binary_sensor.DOMAIN
+        )
+        return True
+
+    mock_platform(hass, f"{TEST_DOMAIN}.config_flow")
+    mock_integration(
+        hass,
+        MockModule(
+            TEST_DOMAIN,
+            async_setup_entry=async_setup_entry_init,
+        ),
+    )
+
+    entity = binary_sensor.BinarySensorEntity()
+    entity.entity_id = "binary_sensor.test1"
+    entity._attr_device_class = device_class
+
+    async def async_setup_entry_platform(
+        hass: HomeAssistant,
+        config_entry: ConfigEntry,
+        async_add_entities: AddEntitiesCallback,
+    ) -> None:
+        """Set up test binary_sensor platform via config entry."""
+        async_add_entities([entity])
+
+    mock_platform(
+        hass,
+        f"{TEST_DOMAIN}.{binary_sensor.DOMAIN}",
+        MockPlatform(async_setup_entry=async_setup_entry_platform),
+    )
+
+    config_entry = MockConfigEntry(domain=TEST_DOMAIN)
+    config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entity.icon is None
+
+    entity.is_on = True
+    assert entity.icon == binary_sensor.DEVICE_ICON_MAP[device_class][0]
+
+    entity.is_on = False
+    assert entity.icon == binary_sensor.DEVICE_ICON_MAP[device_class][1]
+
+
 async def test_entity_category_config_raises_error(
     hass: HomeAssistant,
     caplog: pytest.LogCaptureFixture,
