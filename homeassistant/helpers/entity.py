@@ -16,11 +16,21 @@ import sys
 import threading
 import time
 from types import FunctionType
-from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, TypedDict, final
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Literal,
+    NotRequired,
+    TypedDict,
+    TypeVar,
+    final,
+)
 
 from propcache.api import cached_property
 import voluptuous as vol
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_ASSUMED_STATE,
     ATTR_ATTRIBUTION,
@@ -1642,6 +1652,8 @@ class ToggleEntityDescription(EntityDescription, frozen_or_thawed=True):
 
 TOGGLE_ENTITY_CACHED_PROPERTIES_WITH_ATTR_ = {"is_on"}
 
+T = TypeVar("T", bound="ToggleEntity")
+
 
 class ToggleEntity(
     Entity, cached_properties=TOGGLE_ENTITY_CACHED_PROPERTIES_WITH_ATTR_
@@ -1651,6 +1663,66 @@ class ToggleEntity(
     entity_description: ToggleEntityDescription
     _attr_is_on: bool | None = None
     _attr_state: None = None
+
+    @classmethod
+    async def async_batch_turn_on(
+        cls,
+        entities: list[T],
+        config_entry: ConfigEntry | None,
+        **kwargs: Any,
+    ) -> None:
+        """Turn on a list of entities in a batch.
+
+        All entities will have the same config entry.
+        """
+        await asyncio.gather(*(e.async_turn_on(**kwargs) for e in entities))
+
+    @classmethod
+    async def async_batch_turn_off(
+        cls,
+        entities: list[T],
+        config_entry: ConfigEntry | None,
+        **kwargs: Any,
+    ) -> None:
+        """Turn off a list of entities in a batch.
+
+        All entities will have the same config entry.
+        """
+        await asyncio.gather(*(e.async_turn_off(**kwargs) for e in entities))
+
+    @classmethod
+    async def async_batch_toggle(
+        cls,
+        entities: list[T],
+        config_entry: ConfigEntry | None,
+        **kwargs: Any,
+    ) -> None:
+        """Toggle a list of entities in a batch.
+
+        All entities will have the same config entry.
+
+        Subclasses should probably not override this method.
+        """
+        if not entities:
+            return
+
+        on_entities: list[T] = []
+        off_entities: list[T] = []
+
+        for e in entities:
+            if e.is_on:
+                on_entities.append(e)
+            else:
+                off_entities.append(e)
+
+        tasks = []
+        if on_entities:
+            tasks.append(cls.async_batch_turn_off(on_entities, config_entry, **kwargs))
+        if off_entities:
+            tasks.append(cls.async_batch_turn_on(off_entities, config_entry, **kwargs))
+
+        if tasks:
+            await asyncio.gather(*tasks)
 
     @property
     @final
