@@ -885,32 +885,56 @@ async def _handle_entity_call(
     context: Context,
 ) -> ServiceResponse:
     """Handle calling service method."""
-    entity.async_set_context(context)
 
-    task: asyncio.Future[ServiceResponse] | None
+    # Normalize entities to a list if needed
+    entities_list: list[Entity] = entity if isinstance(entity, list) else [entity]
+
+    # Set context on all entities
+    for ent in entities_list:
+        ent.async_set_context(context)
+
+    task: asyncio.Future[ServiceResponse] | None = None
+    result: ServiceResponse | None = None
+
     if isinstance(func, str):
-        job = HassJob(
-            partial(getattr(entity, func), **data),  # type: ignore[arg-type]
-            job_type=entity.get_hassjob_type(func),
-        )
-        task = hass.async_run_hass_job(job)
-    else:
-        task = hass.async_run_hass_job(func, entity, data)
+        if len(entities_list) > 1:
+            # Batch path: call the classmethod with entities + config_entry
+            cls = type(entities_list[0])
+            batch_method = getattr(cls, func)
 
-    # Guard because callback functions do not return a task when passed to
-    # async_run_job.
-    result: ServiceResponse = None
+            async def job_func() -> None:
+                config_entry = getattr(entities_list[0], "config_entry", None)
+                await batch_method(entities_list, config_entry, **data)
+
+            job_type = None
+            job = HassJob(job_func, job_type=job_type)
+            task = hass.async_run_hass_job(job)
+        else:
+            # Single-entity path: preserve original partial
+            ent = entities_list[0]
+            job = HassJob(
+                partial(getattr(ent, func), **data),  # type: ignore[arg-type]
+                job_type=ent.get_hassjob_type(func),
+            )
+            task = hass.async_run_hass_job(job)
+    else:
+        # func is already a callable or HassJob
+        target = entities_list if len(entities_list) > 1 else entities_list[0]
+        task = hass.async_run_hass_job(func, target, data)
+
     if task is not None:
         result = await task
 
+    # Guard against services returning coroutine instead of awaited result
     if asyncio.iscoroutine(result):
-        _LOGGER.error(  # type: ignore[unreachable]
+        entity_ids = [ent.entity_id for ent in entities_list]  # type: ignore[unreachable]
+        _LOGGER.error(
             (
                 "Service %s for %s incorrectly returns a coroutine object. Await result"
                 " instead in service handler. Report bug to integration author"
             ),
             func,
-            entity.entity_id,
+            entity_ids,
         )
         result = await result
 
