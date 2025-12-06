@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, TypedDict, cast, override
 import voluptuous as vol
 
 from homeassistant.auth.permissions.const import CAT_ENTITIES, POLICY_CONTROL
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_ACTION,
@@ -26,6 +27,9 @@ from homeassistant.const import (
     CONF_TARGET,
     ENTITY_MATCH_ALL,
     ENTITY_MATCH_NONE,
+    SERVICE_TOGGLE,
+    SERVICE_TURN_OFF,
+    SERVICE_TURN_ON,
 )
 from homeassistant.core import (
     Context,
@@ -721,6 +725,89 @@ def _get_permissible_entity_candidates(
     return [entities[entity_id] for entity_id in all_referenced.intersection(entities)]
 
 
+# batching helper functions
+def _extract_batchable_entities(
+    entities: list[Entity],
+    call: ServiceCall,
+) -> tuple[
+    list[Entity], dict[tuple[type, ConfigEntry | None], tuple[list[Entity], str]]
+]:
+    """Return non-batchable entities and a batch_map of batchable ones."""
+
+    remaining: list[Entity] = []
+    batch_map: dict[tuple[type, ConfigEntry | None], tuple[list[Entity], str]] = {}
+
+    # Only light/switch turn_on/off/toggle is batchable
+    if call.domain not in ("light", "switch"):
+        return entities, batch_map
+
+    if call.service not in (SERVICE_TURN_ON, SERVICE_TURN_OFF, SERVICE_TOGGLE):
+        return entities, batch_map
+
+    batch_method_name = f"async_batch_{call.service}"
+
+    # Split entities into batchable and non-batchable
+    batchable_entries = [
+        (type(entity), getattr(entity, "config_entry", None), entity)
+        for entity in entities
+        if hasattr(type(entity), batch_method_name)
+    ]
+
+    # Initialize batch_map entries if missing
+    for cls, config_entry, _ in batchable_entries:
+        key = (cls, config_entry)
+        batch_map.setdefault(key, ([], batch_method_name))
+
+    # Populate batch_map
+    for cls, config_entry, entity in batchable_entries:
+        key = (cls, config_entry)
+        batch_map[key][0].append(entity)
+
+    # Remaining non-batchable entities
+    remaining.extend(
+        entity for entity in entities if not hasattr(type(entity), batch_method_name)
+    )
+
+    return remaining, batch_map
+
+
+def _reinsert_batch_singletons(
+    remaining: list[Entity],
+    batch_map: dict[tuple[type, ConfigEntry | None], tuple[list[Entity], str]],
+) -> tuple[
+    list[Entity], dict[tuple[type, ConfigEntry | None], tuple[list[Entity], str]]
+]:
+    """If a batch contains only one entity, move it back to the main list."""
+
+    for key, (batch_entities, _) in list(batch_map.items()):
+        if len(batch_entities) == 1:
+            remaining.append(batch_entities[0])
+            del batch_map[key]
+
+    return remaining, batch_map
+
+
+def _build_call_list(
+    remaining: list[Entity],
+    batch_map: dict[tuple[type, ConfigEntry | None], tuple[list[Entity], str]],
+    func: str | HassJob,
+) -> list[tuple[Entity | list[Entity], str | HassJob, bool]]:
+    """Return a list of (target, func, is_batch) entries for gather."""
+
+    calls: list[tuple[Entity | list[Entity], str | HassJob, bool]] = []
+
+    # Add batches first (preserves stable ordering if needed)
+    calls.extend(
+        (batch_entities, batch_method_name, True)
+        for batch_entities, batch_method_name in batch_map.values()
+    )
+
+    # Add single-entity non-batchable calls
+    calls.extend([(entity, func, False) for entity in remaining])
+
+    return calls
+
+
 @bind_hass
 async def entity_service_call(
     hass: HomeAssistant,
@@ -787,7 +874,7 @@ async def entity_service_call(
             missing.discard(entity.entity_id)
         referenced.log_missing(missing, _LOGGER)
 
-    entities: list[Entity] = []
+    entities = []
     for entity in entity_candidates:
         if not entity.available:
             continue
@@ -839,14 +926,19 @@ async def entity_service_call(
             await entity.async_update_ha_state(True)
         return {entity.entity_id: single_response} if return_response else None
 
-    # Use asyncio.gather here to ensure the returned results
-    # are in the same order as the entities list
-    results: list[ServiceResponse | BaseException] = await asyncio.gather(
+    # multiple entities -> apply batching
+    remaining, batch_map = _extract_batchable_entities(entities, call)
+    remaining, batch_map = _reinsert_batch_singletons(remaining, batch_map)
+    all_calls = _build_call_list(remaining, batch_map, func)
+
+    results = await asyncio.gather(
         *[
-            entity.async_request_call(
-                _handle_entity_call(hass, entity, func, data, call.context)
+            _handle_entity_call(hass, target, target_func, data, call.context)
+            if is_batch
+            else entity.async_request_call(
+                _handle_entity_call(hass, target, target_func, data, call.context)
             )
-            for entity in entities
+            for target, target_func, is_batch in all_calls
         ],
         return_exceptions=True,
     )
@@ -879,7 +971,7 @@ async def entity_service_call(
 
 async def _handle_entity_call(
     hass: HomeAssistant,
-    entity: Entity,
+    entity: Entity | list[Entity],
     func: str | HassJob,
     data: dict | ServiceCall,
     context: Context,
@@ -896,7 +988,16 @@ async def _handle_entity_call(
     task: asyncio.Future[ServiceResponse] | None = None
     result: ServiceResponse | None = None
 
+    service_data: dict[str, Any]
+    if isinstance(data, dict):
+        service_data = data
+    else:
+        service_data = cast(
+            dict[str, Any], getattr(data, "data", {})
+        )  # e.g., if data is a ServiceCall
+
     if isinstance(func, str):
+        job: HassJob
         if len(entities_list) > 1:
             # Batch path: call the classmethod with entities + config_entry
             cls = type(entities_list[0])
@@ -904,19 +1005,18 @@ async def _handle_entity_call(
 
             async def job_func() -> None:
                 config_entry = getattr(entities_list[0], "config_entry", None)
-                await batch_method(entities_list, config_entry, **data)
+                await batch_method(entities_list, config_entry, **service_data)
 
             job_type = None
             job = HassJob(job_func, job_type=job_type)
-            task = hass.async_run_hass_job(job)
         else:
             # Single-entity path: preserve original partial
             ent = entities_list[0]
             job = HassJob(
-                partial(getattr(ent, func), **data),  # type: ignore[arg-type]
+                partial(getattr(ent, func), **service_data),
                 job_type=ent.get_hassjob_type(func),
             )
-            task = hass.async_run_hass_job(job)
+        task = hass.async_run_hass_job(job)
     else:
         # func is already a callable or HassJob
         target = entities_list if len(entities_list) > 1 else entities_list[0]
